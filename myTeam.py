@@ -77,6 +77,7 @@ class ReflexCaptureAgent(CaptureAgent):
     def __init__(self, index, time_for_computing=.001):
         super().__init__(index, time_for_computing)
         self.start = None
+        self.returning_home = False
 
     def register_initial_state(self, game_state):
         self.start = game_state.get_agent_position(self.index)
@@ -225,7 +226,7 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
         home_distances = [(self.get_maze_distance(my_pos, home), home) for home in home_list]
         home_sorted = [h[1] for h in sorted(home_distances)]
 
-        return home_sorted
+        return home_sorted[:1]
 
     def get_ghosts(self, game_state):
         enemies = [game_state.get_agent_state(i) for i in self.get_opponents(game_state)]
@@ -242,17 +243,22 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
         c = None if not self.get_capsules(game_state) else self.get_capsules(game_state)
         scared, not_scared = self.get_ghosts(game_state)
         # print(f, c, h)
-
         if food_left <= 2:
             return h
+        if not carrying:
+            self.returning_home = False
+        if self.returning_home:
+            return h
+        
         if not scared and not not_scared:
             return f
         elif not_scared and c:
             return c
         elif not_scared:
             if carrying:
+                self.returning_home = True
                 return h
-            else:
+            else: 
                 return f
 
         return f
@@ -300,11 +306,18 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
                 margin = self.get_maze_distance(open_space, target)
                 
                 if my_dist + margin < ghost_dist:
+                    # print("1")
                     return OffensiveReflexAgent.attacker_Astar(self, game_state, target)
                     
             else:
-                return OffensiveReflexAgent.attacker_Astar(self, game_state, target)
-        return OffensiveReflexAgent.attacker_Astar(self, game_state, self.start)
+                # print("2")
+                return OffensiveReflexAgent.attacker_Astar(self, game_state, targets[0])
+        # print("3")
+        # print(self.start)
+        tmp = list(self.start)
+        tmp[1] += 1
+        tmp = tuple(tmp)
+        return OffensiveReflexAgent.attacker_Astar(self, game_state, random.choice(targets)) #TODO: fix
 
 
     
@@ -325,8 +338,10 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
 
         if len(target) == 1:
             best_action = OffensiveReflexAgent.attacker_Astar(self, game_state, target[0])
+            print("h")
         else:
             best_action = self.attacker_Astar_food(game_state, target)
+            print("f")
         # print('eval time for agent %d: %.4f' % (self.index, time.time() - start))
 
         return best_action
