@@ -107,6 +107,7 @@ class ReflexCaptureAgent(CaptureAgent):
         self.start = None
         self.returning_home = False
         self.escape_deadlock = False
+        self.deadlock_cell = [0, 0]
 
     def register_initial_state(self, game_state):
         self.start = game_state.get_agent_position(self.index)
@@ -158,6 +159,10 @@ class ReflexCaptureAgent(CaptureAgent):
     def sort_distances(self, distances):
         return [dist[1] for dist in sorted(distances)]
     
+    def is_pacman(self, game_state):
+        state = game_state.get_agent_state(self.index)
+        return state.is_pacman
+
     def get_edibles(self, game_state):
         food_list = self.get_food_positions(game_state)
 
@@ -180,6 +185,13 @@ class ReflexCaptureAgent(CaptureAgent):
                 home.append((w, h))
         return home
     
+    def get_escape_position(self, game_state):
+        my_pos = self.get_my_position(game_state)
+        edge_home_cells = self.get_edge_home_cells(game_state)
+        edge_home_cells_distances = self.calculate_distances_with_positions(game_state, edge_home_cells)
+        edge_home_cells_distances = self.sort_distances(edge_home_cells_distances)
+        return edge_home_cells_distances[-1]
+
     def get_closest_home_cell_position(self, game_state):
         home_list = self.get_edge_home_cells(game_state)
         home = self.sort_distances(self.calculate_distances_with_positions(game_state, home_list))
@@ -250,12 +262,14 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
     
     def choose_action(self, game_state):
         # start = time.time()
+
         # If you end up on the far side of the arena, give up
         if self.panic(game_state): return "Stop"
 
         targets = self.choose_targets(game_state)
 
         best_action = self.attacker_Astar_food(game_state, targets)
+        
         # print('eval time for agent %d: %.4f' % (self.index, time.time() - start))
 
         return best_action
@@ -277,9 +291,18 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
         # If you decided to play safe and go home, go home (if you returned all of the food you were carrying stop going home)
         if not carrying:
             self.returning_home = False
+
+        if carrying and game_state.data.timeleft < 100:
+            return h 
+
         if self.returning_home:
             return h
         
+        if self.get_my_position(game_state) == self.deadlock_cell:
+            self.escape_deadlock = False
+        if self.escape_deadlock:
+            return [self.deadlock_cell]
+
         # If you dont see anyone, go get food
         if not scared_ghosts and not ghosts:
             return f
@@ -317,13 +340,16 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
                     print("1")
                     return self.Astar(game_state, target)
 
-                    
-            print("3")
-            # print(self.start)
-            tmp = list(self.start)
-            tmp[1] += 1
-            tmp = tuple(tmp)
-            return self.Astar(game_state, tmp) #TODO: fix
+            if not self.is_pacman(game_state):
+                self.escape_deadlock = True
+                self.deadlock_cell = self.get_escape_position(game_state) 
+                print('2')
+
+                return self.Astar(game_state, self.deadlock_cell)
+                
+            else:
+                print('3')
+                return self.Astar(game_state, self.get_closest_home_cell_position(game_state)[0])
 
 class DefensiveReflexAgent(ReflexCaptureAgent):
     """
