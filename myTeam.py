@@ -141,8 +141,8 @@ class ReflexCaptureAgent(CaptureAgent):
         return len(self.get_food(game_state).as_list())
     
     def get_enemy_pacmen_positions(self, game_state):
-        enemie_states = [game_state.get_agent_state(i) for i in self.get_opponents(game_state)]
-        return [a.get_position() for a in enemie_states if a.is_pacman and a.get_position() is not None]
+        enemy_states = [game_state.get_agent_state(i) for i in self.get_opponents(game_state)]
+        return [a.get_position() for a in enemy_states if a.is_pacman and a.get_position() is not None]
     
     def get_enemy_ghost_positions(self, game_state):
         enemies = [game_state.get_agent_state(i) for i in self.get_opponents(game_state)]
@@ -177,14 +177,17 @@ class ReflexCaptureAgent(CaptureAgent):
 
         return food
     
-    def get_edge_home_cells(self, game_state):
-        w = arena_width(game_state) // 2 - 1 if self.red else arena_width(game_state) // 2
+    def get_edge_home_cells(self, game_state, enemy_home=False):
+        if enemy_home:
+            w = arena_width(game_state) // 2 - (0 if self.red else 1)
+        else:
+            w = arena_width(game_state) // 2 - (1 if self.red else 0)
         home = []
         for h in range(1, arena_height(game_state) - 1):
             if is_not_wall(game_state, (w, h)):
                 home.append((w, h))
         return home
-    
+
     def get_escape_position(self, game_state):
         my_pos = self.get_my_position(game_state)
         edge_home_cells = self.get_edge_home_cells(game_state)
@@ -206,12 +209,16 @@ class ReflexCaptureAgent(CaptureAgent):
         my_score = self.get_maze_distance(my_pos, target) + distance_traveled
         return my_score
 
-    def Astar(self, game_state, target):
+    def Astar(self, game_state, target, excluded_positions=None):
         pq = PriorityQueue()
-        visited = set()
         # Needed to resolve order in the priority queue if two states have the same score
         counter = count()
         self.add_to_prio_queue(pq, game_state, 0, None, None, target, counter)
+        
+        visited = set()
+        # Positions that we don't want to visit are treated as visited
+        if excluded_positions:
+            visited.update(excluded_positions)
         
         while not pq.empty():
             previous, current_game_state, distance_traveled = self.get_from_prio_queue(pq)
@@ -266,9 +273,10 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
         # If you end up on the far side of the arena, give up
         if self.panic(game_state): return "Stop"
 
-        targets = self.choose_targets(game_state)
+        targets, exclude = self.choose_targets(game_state), None
+        if isinstance(targets, tuple): targets, exclude = targets
 
-        best_action = self.attacker_Astar_food(game_state, targets)
+        best_action = self.attacker_Astar(game_state, targets, exclude)
         
         # print('eval time for agent %d: %.4f' % (self.index, time.time() - start))
 
@@ -287,48 +295,52 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
         # If you have enough food to win, go home
         if food_left <= 2:
             return h
-        
+
+        # If we carry food and time is running out then it's better to go home 
+        if carrying and game_state.data.timeleft < 100:
+            return h
+
         # If you decided to play safe and go home, go home (if you returned all of the food you were carrying stop going home)
         if not carrying:
             self.returning_home = False
 
-        if carrying and game_state.data.timeleft < 100:
-            return h 
-
         if self.returning_home:
             return h
         
+        # If we are escaping, go to deadlock cell (stop escaping when we reach that cell)
         if self.get_my_position(game_state) == self.deadlock_cell:
             self.escape_deadlock = False
+        
         if self.escape_deadlock:
-            return [self.deadlock_cell]
+            # We wish to exclude enemy home edge cells when going to escape position
+            return [self.deadlock_cell], self.get_edge_home_cells(game_state, enemy_home=True)
 
         # If you dont see anyone, go get food
         if not scared_ghosts and not ghosts:
             return f
+
         # If you see enemy ghosts and there is a capsule, go get the capsule
-        elif ghosts and c:
+        if ghosts and c:
             return c
+
         # If you see a ghost and there is no capsules
-        elif ghosts:
-            # If a ghost is near you and you have food, play safe and start going home
+        if ghosts:
+            # If a ghost is near you and you have food, play safe and start going home (otherwise take the risk)
             if carrying and min(self.calculate_distances_to(game_state, ghosts)) < 5:
                 self.returning_home = True
                 return h
-            # If you dont have food on you, you have nothing to lose so try getting food
-            else: 
-                return f
-
+            
+        # If none of the above conditions happened then go for food
         return f
     
-    def attacker_Astar_food(self, game_state, targets):
+    def attacker_Astar(self, game_state, targets, excluded_positions=None):
         ghosts, scared_ghosts = self.get_enemy_ghost_positions(game_state)
         my_pos = self.get_my_position(game_state)
         ghost_dists = self.calculate_distances_to(game_state, ghosts)
 
         if len(targets) == 1 or not ghost_dists:
-            return self.Astar(game_state, targets[0])
-        elif ghost_dists:
+            return self.Astar(game_state, targets[0], excluded_positions)
+        else:   # note that ghost dists is not empty!
             for target in targets:
                 open_space = nearest_open_space(game_state, target)
                 ghost_dist = min(ghost_dists)
@@ -336,20 +348,18 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
                 my_dist = self.get_maze_distance(my_pos, open_space)
                 margin = self.get_maze_distance(open_space, target)
                 
-                if my_dist + margin*2 + 1 < ghost_dist:
+                if my_dist + margin * 2 + 1 < ghost_dist:
                     print("1")
-                    return self.Astar(game_state, target)
+                    return self.Astar(game_state, target, excluded_positions)
 
             if not self.is_pacman(game_state):
                 self.escape_deadlock = True
                 self.deadlock_cell = self.get_escape_position(game_state) 
                 print('2')
-
-                return self.Astar(game_state, self.deadlock_cell)
-                
+                return self.Astar(game_state, self.deadlock_cell, self.get_edge_home_cells(game_state, enemy_home=True))    
             else:
                 print('3')
-                return self.Astar(game_state, self.get_closest_home_cell_position(game_state)[0])
+                return self.Astar(game_state, self.get_closest_home_cell_position(game_state)[0], excluded_positions)
 
 class DefensiveReflexAgent(ReflexCaptureAgent):
     """
