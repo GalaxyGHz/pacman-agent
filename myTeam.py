@@ -106,7 +106,7 @@ class ReflexCaptureAgent(CaptureAgent):
         super().__init__(index, time_for_computing)
         self.start = None
         self.returning_home = False
-        self.escape_deadlock = False
+        self.escape_deadlock_state = 0
         self.deadlock_cell = [0, 0]
 
     def register_initial_state(self, game_state):
@@ -124,6 +124,9 @@ class ReflexCaptureAgent(CaptureAgent):
             return next_game_state.generate_successor(self.index, action)
         else:
             return next_game_state
+        
+    def in_lead(self, game_state):
+        return game_state.data.score if self.red else -game_state.data.score
         
     def num_carrying(self, game_state):
         return game_state.get_agent_state(self.index).num_carrying
@@ -217,6 +220,7 @@ class ReflexCaptureAgent(CaptureAgent):
         
         visited = set()
         # Positions that we don't want to visit are treated as visited
+        visited.add(self.start)
         if excluded_positions:
             visited.update(excluded_positions)
         
@@ -224,9 +228,6 @@ class ReflexCaptureAgent(CaptureAgent):
             previous, current_game_state, distance_traveled = self.get_from_prio_queue(pq)
             my_pos = self.get_my_position(current_game_state)
 
-            if my_pos in visited:
-                continue
-            visited.add(my_pos)
             if my_pos == target:
                 break
 
@@ -234,9 +235,9 @@ class ReflexCaptureAgent(CaptureAgent):
             for action in actions:
                 next_game_state = self.get_next_game_state(current_game_state, action)
                 my_pos = self.get_my_position(next_game_state)
-                # If you get eaten, discard state
-                if my_pos == self.start:
+                if my_pos in visited:
                     continue
+                visited.add(my_pos)
                 self.add_to_prio_queue(pq, next_game_state, distance_traveled + 1, previous, action, target, counter)
 
         return self.first_action(previous)
@@ -273,7 +274,7 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
         # If you end up on the far side of the arena, give up
         if self.panic(game_state): return "Stop"
 
-        targets, exclude = self.choose_targets(game_state), None
+        targets, exclude = self.choose_targets(game_state), []
         if isinstance(targets, tuple): targets, exclude = targets
 
         best_action = self.choose_best_action_for_target(game_state, targets, exclude)
@@ -289,6 +290,7 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
         f = self.get_edibles(game_state)
         h = self.get_closest_home_cell_position(game_state)
         c = self.get_capsules(game_state)
+        p = self.get_enemy_pacmen_positions(game_state)
         
         ghosts, scared_ghosts = self.get_enemy_ghost_positions(game_state)
         
@@ -309,11 +311,22 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
         
         # If we are escaping, go to deadlock cell (stop escaping when we reach that cell)
         if self.get_my_position(game_state) == self.deadlock_cell:
-            self.escape_deadlock = False
+            self.escape_deadlock_state = 0
         
-        if self.escape_deadlock:
+        # If your already on your side and are running, if there are enemies you can chase, go after them
+        if self.escape_deadlock_state and p and self.not_scared(game_state):
+            self.escape_deadlock_state = 2
+            return p
+        
+        if self.escape_deadlock_state == 1:
             # We wish to exclude enemy home edge cells when going to escape position
-            return [self.deadlock_cell], self.get_edge_home_cells(game_state, enemy_home=True)
+            if self.in_lead(game_state) > 0:
+                return [self.deadlock_cell], self.get_edge_home_cells(game_state, enemy_home=True)  
+            else:
+                return f
+        else:
+            # No more deadlock
+            self.escape_deadlock_state = 0
 
         # If you dont see anyone, go get food
         if not scared_ghosts and not ghosts:
@@ -326,14 +339,14 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
         # If you see a ghost and there is no capsules
         if ghosts:
             # If a ghost is near you and you have food, play safe and start going home (otherwise take the risk)
-            if carrying and min(self.calculate_distances_to(game_state, ghosts)) < 5:
+            if carrying and min(self.calculate_distances_to(game_state, ghosts)) < 3:
                 self.returning_home = True
                 return h
             
         # If none of the above conditions happened then go for food
         return f
     
-    def choose_best_action_for_target(self, game_state, targets, excluded_positions=None):
+    def choose_best_action_for_target(self, game_state, targets, excluded_positions):
         ghosts, scared_ghosts = self.get_enemy_ghost_positions(game_state)
         my_pos = self.get_my_position(game_state)
         ghost_dists = self.calculate_distances_to(game_state, ghosts)
@@ -352,7 +365,7 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
                     return self.Astar(game_state, target, excluded_positions)
 
             if not self.is_pacman(game_state):
-                self.escape_deadlock = True
+                self.escape_deadlock_state = 1
                 self.deadlock_cell = self.get_escape_position(game_state) 
                 return self.Astar(game_state, self.deadlock_cell, self.get_edge_home_cells(game_state, enemy_home=True))    
             else:
