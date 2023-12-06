@@ -276,7 +276,7 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
         targets, exclude = self.choose_targets(game_state), None
         if isinstance(targets, tuple): targets, exclude = targets
 
-        best_action = self.attacker_Astar(game_state, targets, exclude)
+        best_action = self.choose_best_action_for_target(game_state, targets, exclude)
         
         # print('eval time for agent %d: %.4f' % (self.index, time.time() - start))
 
@@ -333,7 +333,7 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
         # If none of the above conditions happened then go for food
         return f
     
-    def attacker_Astar(self, game_state, targets, excluded_positions=None):
+    def choose_best_action_for_target(self, game_state, targets, excluded_positions=None):
         ghosts, scared_ghosts = self.get_enemy_ghost_positions(game_state)
         my_pos = self.get_my_position(game_state)
         ghost_dists = self.calculate_distances_to(game_state, ghosts)
@@ -349,16 +349,13 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
                 margin = self.get_maze_distance(open_space, target)
                 
                 if my_dist + margin * 2 + 1 < ghost_dist:
-                    print("1")
                     return self.Astar(game_state, target, excluded_positions)
 
             if not self.is_pacman(game_state):
                 self.escape_deadlock = True
                 self.deadlock_cell = self.get_escape_position(game_state) 
-                print('2')
                 return self.Astar(game_state, self.deadlock_cell, self.get_edge_home_cells(game_state, enemy_home=True))    
             else:
-                print('3')
                 return self.Astar(game_state, self.get_closest_home_cell_position(game_state)[0], excluded_positions)
 
 class DefensiveReflexAgent(ReflexCaptureAgent):
