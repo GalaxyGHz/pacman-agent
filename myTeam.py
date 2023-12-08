@@ -134,6 +134,9 @@ class ReflexCaptureAgent(CaptureAgent):
     def not_scared(self, game_state):
         return game_state.get_agent_state(self.index).scared_timer == 0
     
+    def scared(self, game_state):
+        return game_state.get_agent_state(self.index).scared_timer != 0
+    
     def get_my_position(self, game_state):
         return game_state.get_agent_state(self.index).get_position()
     
@@ -170,8 +173,8 @@ class ReflexCaptureAgent(CaptureAgent):
         food_list = self.get_food_positions(game_state)
 
         # If you are closer to an enemy that you can eat than to any food, eat them
-        pacmen_list = self.get_enemy_pacmen_positions(game_state)
-
+        # pacmen_list = self.get_enemy_pacmen_positions(game_state)
+        pacmen_list = []
         # If you are scared, ignore attacking enemies
         if self.not_scared(game_state):
             food_list += pacmen_list
@@ -203,6 +206,14 @@ class ReflexCaptureAgent(CaptureAgent):
         home = self.sort_distances(self.calculate_distances_with_positions(game_state, home_list))
         return home[:1]
     
+    def near_center(self, game_state, my_x):
+        w = arena_width(game_state)
+        if self.red:
+            x_left, x_right = w // 2 - 5, w // 2 - 1
+        else:
+            x_left, x_right = w // 2, w // 2 + 4 
+        return x_left <= my_x <= x_right
+        
     def panic(self, game_state):
         my_pos = self.get_my_position(game_state)
         enemy_start = arena_width(game_state) - 2 if self.red else 1
@@ -223,7 +234,9 @@ class ReflexCaptureAgent(CaptureAgent):
         visited.add(self.start)
         if excluded_positions:
             visited.update(excluded_positions)
-        
+        if self.get_my_position(game_state) == target:
+            return "Stop"
+
         while not pq.empty():
             previous, current_game_state, distance_traveled = self.get_from_prio_queue(pq)
             my_pos = self.get_my_position(current_game_state)
@@ -263,10 +276,8 @@ class ReflexCaptureAgent(CaptureAgent):
         
 class OffensiveReflexAgent(ReflexCaptureAgent):
     """
-  A reflex agent that seeks food. This is an agent
-  we give you to get an idea of what an offensive agent might look like,
-  but it is by no means the best or only way to build an offensive agent.
-  """
+    Cool Attacker
+    """
     
     def choose_action(self, game_state):
         # start = time.time()
@@ -364,84 +375,67 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
                 if my_dist + margin * 2 + 1 < ghost_dist:
                     return self.Astar(game_state, target, excluded_positions)
 
-            if not self.is_pacman(game_state):
+            if not self.is_pacman(game_state) and min(ghost_dists) <= 5:
                 self.escape_deadlock_state = 1
                 self.deadlock_cell = self.get_escape_position(game_state) 
                 return self.Astar(game_state, self.deadlock_cell, self.get_edge_home_cells(game_state, enemy_home=True))    
             else:
-                return self.Astar(game_state, self.get_closest_home_cell_position(game_state)[0], excluded_positions)
+                return self.Astar(game_state, targets[-1], excluded_positions)
 
 class DefensiveReflexAgent(ReflexCaptureAgent):
     """
-    A reflex agent that keeps its side Pacman-free. Again,
-    this is to give you an idea of what a defensive agent
-    could be like.  It is not the best or only way to make
-    such an agent.
+    Cool Defender
     """
-
     def choose_action(self, game_state):
-        """
-        Picks among the actions with the highest Q(s,a).
-        """
-
-        actions = game_state.get_legal_actions(self.index)
-
-        # You can profile your evaluation time by uncommenting these lines
         # start = time.time()
-        values = [self.evaluate(game_state, a) for a in actions]
-        # print 'eval time for agent %d: %.4f' % (self.index, time.time() - start)
 
-        max_value = max(values)
-        best_actions = [a for a, v in zip(actions, values) if v == max_value]
+        targets, exclude = self.choose_targets(game_state), []
+        if isinstance(targets, tuple): targets, exclude = targets
 
-        food_left = len(self.get_food(game_state).as_list())
+        best_action = self.choose_best_action_for_target(game_state, targets, exclude)
+        
+        # print('eval time for agent %d: %.4f' % (self.index, time.time() - start))
 
-        if food_left <= 2:
-            best_dist = 9999
-            best_action = None
-            for action in actions:
-                next_game_state = self.get_next_game_state(game_state, action)
-                pos2 = next_game_state.get_agent_position(self.index)
-                dist = self.get_maze_distance(self.start, pos2)
-                if dist < best_dist:
-                    best_action = action
-                    best_dist = dist
-            return best_action
-
-        return random.choice(best_actions)
+        return best_action
     
-    def evaluate(self, game_state, action):
-        """
-        Computes a linear combination of features and feature weights
-        """
-        features = self.get_features(game_state, action)
-        weights = self.get_weights(game_state, action)
-        return features * weights
+    def choose_targets(self, game_state):
+        food_left = self.get_food_count(game_state)
+        carrying = self.num_carrying(game_state)
 
-    def get_features(self, game_state, action):
-        features = util.Counter()
-        next_game_state = self.get_next_game_state(game_state, action)
+        f = self.get_edibles(game_state)
+        h = self.get_closest_home_cell_position(game_state)
+        c = self.get_capsules(game_state)
+        p = self.get_enemy_pacmen_positions(game_state)
+        
+        ghosts, scared_ghosts = self.get_enemy_ghost_positions(game_state)
+        home_cells = self.get_edge_home_cells(game_state)
+        excluded_cells = self.get_edge_home_cells(game_state, enemy_home=True)
+        
+        if game_state.data.timeleft > 1100:
+            return [h[len(h) // 2 - 1]], excluded_cells
 
-        my_state = next_game_state.get_agent_state(self.index)
-        my_pos = my_state.get_position()
+        if p and self.near_center(game_state, self.get_my_position(game_state)[0]):
+            return self.sort_distances(self.calculate_distances_with_positions(game_state, p))[:1], excluded_cells
 
-        # Computes whether we're on defense (1) or offense (0)
-        features['on_defense'] = 1
-        if my_state.is_pacman: features['on_defense'] = 0
+        if p:
+            closest_cell = self.get_ghost_facing_home_cell(game_state, p)
+            return [closest_cell], excluded_cells
+        
+        if ghosts or scared_ghosts:
+            closest_cell = self.get_ghost_facing_home_cell(game_state, ghosts + scared_ghosts)
+            return [closest_cell], excluded_cells
 
-        # Computes distance to invaders we can see
-        enemies = [next_game_state.get_agent_state(i) for i in self.get_opponents(next_game_state)]
-        invaders = [a for a in enemies if a.is_pacman and a.get_position() is not None]
-        features['num_invaders'] = len(invaders)
-        if len(invaders) > 0:
-            dists = [self.get_maze_distance(my_pos, a.get_position()) for a in invaders]
-            features['invader_distance'] = min(dists)
+        return [random.choice(home_cells)], excluded_cells
 
-        if action == Directions.STOP: features['stop'] = 1
-        rev = Directions.REVERSE[game_state.get_agent_state(self.index).configuration.direction]
-        if action == rev: features['reverse'] = 1
+    def get_ghost_facing_home_cell(self, game_state, ghosts):
+        enemy_pos = self.sort_distances(self.calculate_distances_with_positions(game_state, ghosts))[0]
+        w = arena_width(game_state)
+        possible_x = range(w // 2 - 1, -1, -1) if self.red else range(w // 2, w)
 
-        return features
+        for x in possible_x:
+            curr_cell = (x, enemy_pos[1])
+            if is_not_wall(game_state, curr_cell):
+                return curr_cell
 
-    def get_weights(self, game_state, action):
-        return {'num_invaders': -1000, 'on_defense': 100, 'invader_distance': -10, 'stop': -100, 'reverse': -2}
+    def choose_best_action_for_target(self, game_state, targets, excluded_positions):
+        return self.Astar(game_state, targets[0], excluded_positions)
